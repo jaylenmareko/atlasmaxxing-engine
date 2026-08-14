@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+:root {
+  --canvas: #F1F0EA;
+  --canvas-2: #E9E7DF;
+  --dot: rgba(20, 25, 40, .08);
+  --node: #FFFFFF;
+  --node-line: #E4E2DA;
+  --ink: #1B2027;
+  --muted: #7A8291;
+  --faint: #A8AEB8;
+  --blue: #2F80ED;
+  --coral: #FF6A43;
+  --coral-deep: #DC4318;
+  --green: #2E9E6B;
+  --violet: #7B5EE0;
+  --pink: #E0417E;
+  --yellow: #E8A93B;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #171A1F;
+    --canvas-2: #1D2127;
+    --dot: rgba(255, 255, 255, .06);
+    --node: #20252D;
+    --node-line: #2E353F;
+    --ink: #EDF0F4;
+    --muted: #98A1AD;
+    --faint: #66707C;
+    --blue: #4F97FF;
+    --coral: #FF8560;
+    --coral-deep: #FF6A43;
+    --green: #3FBF8A;
+    --violet: #9884EC;
+    --pink: #F0629A;
+    --yellow: #E8B559;
+  }
+}
+
+:root[data-theme="dark"] {
+  --canvas: #171A1F;
+  --canvas-2: #1D2127;
+  --dot: rgba(255, 255, 255, .06);
+  --node: #20252D;
+  --node-line: #2E353F;
+  --ink: #EDF0F4;
+  --muted: #98A1AD;
+  --faint: #66707C;
+  --blue: #4F97FF;
+  --coral: #FF8560;
+  --coral-deep: #FF6A43;
+  --green: #3FBF8A;
+  --violet: #9884EC;
+  --pink: #F0629A;
+  --yellow: #E8B559;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-canvas-2: var(--canvas-2);
+  --color-node: var(--node);
+  --color-node-line: var(--node-line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-blue: var(--blue);
+  --color-coral: var(--coral);
+  --color-coral-deep: var(--coral-deep);
+  --color-green: var(--green);
+  --color-violet: var(--violet);
+  --color-pink: var(--pink);
+  --color-yellow: var(--yellow);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.dot-grid {
+  background-image: radial-gradient(var(--dot) 1.6px, transparent 1.6px);
+  background-size: 26px 26px;
+  /* without this, the background stays pinned to the element's own box and
+     ignores scrollLeft/scrollTop when this same element is what's being
+     panned — "local" scrolls it together with the element's real content */
+  background-attachment: local;
+}
+
+.cap {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}

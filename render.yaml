@@ -1,0 +1,32 @@
+# Render Blueprint — lets you create the service by pointing Render at this
+# repo (New > Blueprint) instead of clicking through the web-service form.
+#
+# Everything here is config that belongs in version control. The three secrets
+# are declared but NOT stored: `sync: false` means "prompt me for this in the
+# dashboard on first deploy" — the values never enter this file or git.
+services:
+  - type: web
+    name: engine-frontend
+    runtime: docker
+    plan: starter # $7/mo. The free tier sleeps after inactivity, and a cold
+                  # start stacked on top of a ~2min transcribe is miserable.
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    # Unauthenticated on purpose — see src/app/healthz/route.ts. Pointing this
+    # at "/" would 401 against the Basic Auth gate and fail every deploy.
+    healthCheckPath: /healthz
+
+    envVars:
+      # Whisper fallback, used whenever a video has no captions — which is
+      # essentially always for Instagram and TikTok. Swap the key name to
+      # OPENAI_API_KEY if you'd rather use OpenAI.
+      - key: GROQ_API_KEY
+        sync: false
+      # Site-wide shared login. If these two are unset the site is PUBLIC —
+      # the gate is skipped so local dev doesn't prompt, which means omitting
+      # them here leaves the deploy wide open.
+      - key: BASIC_AUTH_USER
+        sync: false
+      - key: BASIC_AUTH_PASS
+        sync: false
