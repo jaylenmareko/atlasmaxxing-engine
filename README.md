@@ -11,9 +11,9 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-The transcript pull (below) also needs `python3`, `ffmpeg` and `yt-dlp` on
-PATH, plus a Whisper API key, or it will only work on videos that already
-have captions.
+The transcript pull (below) also needs `python3`, `ffmpeg`, `yt-dlp`, and an
+AssemblyAI API key on PATH/in env — every pull needs all four, there's no
+captions-only fast path.
 
 > On Windows, `python3` is an App Execution Alias that doesn't actually run
 > Python — the API route falls back to `python` there automatically. Set
@@ -25,18 +25,21 @@ The sidebar's source-video card takes a pasted Instagram/TikTok/YouTube URL
 and fills the Transcript box:
 
 ```
-POST /api/transcript  { "url": "..." }  ->  { "transcript": "...", "source": "captions" }
+POST /api/transcript  { "url": "..." }  ->  { "transcript": "...", "segments": [{ "time": "0:01", "speaker": "Speaker A", "text": "..." }], "source": "assemblyai" }
 ```
 
-`scripts/transcript.py` does the work, in this order:
+`scripts/transcript.py` does the work: `yt-dlp -f ba/b` (audio only) →
+`ffmpeg` (16 kHz mono mp3) → AssemblyAI, with `speaker_labels: true`. **Needs
+`ASSEMBLYAI_API_KEY`** — checks the plain env var first, then falls back to
+`~/.config/engine-frontend/.env` for local dev. Each returned segment is one
+speaker's turn (`"Speaker A"`, `"Speaker B"`, …), not a blended time slice.
 
-1. `yt-dlp --skip-download` → subtitles. Fast, no media bytes, **no API key
-   needed**. Most YouTube links stop here.
-2. No captions → `yt-dlp -f ba/b` (audio only) → `ffmpeg` (16 kHz mono mp3) →
-   Groq/OpenAI Whisper. **Needs `GROQ_API_KEY` or `OPENAI_API_KEY`.**
-
-Instagram and TikTok essentially never have captions, so in practice they
-always take path 2 — a key is not optional for real use.
+There used to be a captions-first fast path (skip the audio download when a
+video already had captions, no API key needed). Removed on purpose: captions
+never carry speaker info, and most YouTube videos have auto-captions, so that
+path always won and diarization never actually ran — the whole point of the
+AssemblyAI fallback. Every pull costs an API call now; there's no free/fast
+case, but every pull is diarized.
 
 These scripts are trimmed copies of the repo-root `/watch` skill
 (`.claude/skills/watch/scripts/`), with frame extraction removed. The Python
@@ -56,12 +59,9 @@ dashboard work:
 
    | Key | Why |
    |---|---|
-   | `GROQ_API_KEY` | Whisper fallback. Preferred over OpenAI (faster, cheaper). |
+   | `ASSEMBLYAI_API_KEY` | Audio fallback, with speaker diarization. Sign up at assemblyai.com. |
    | `BASIC_AUTH_USER` | Site-wide login. |
    | `BASIC_AUTH_PASS` | Site-wide login. |
-
-   `OPENAI_API_KEY` works instead of `GROQ_API_KEY` if you'd rather — the
-   Python side checks Groq first, then OpenAI.
 
    > **If `BASIC_AUTH_USER`/`BASIC_AUTH_PASS` are unset, the site is public.**
    > The gate is skipped when they're missing so local dev doesn't prompt —

@@ -1,9 +1,11 @@
-// POST { url } -> { transcript } | { error }
+// POST { url } -> { transcript, segments } | { error }
 //
-// Thin Node wrapper around scripts/transcript.py (captions first, Whisper
-// fallback). Deliberately synchronous: this runs on a real always-on Node
-// server (Render Starter), not a serverless function, so a request that takes
-// 30s-2min to download and transcribe is fine and needs no job queue.
+// Thin Node wrapper around scripts/transcript.py (audio -> AssemblyAI, with
+// speaker diarization, always — no captions fast path, see that script's
+// module docstring for why). Deliberately synchronous: this runs on a real
+// always-on Node server (Render Starter), not a serverless function, so a
+// request that takes 30s-2min to download and transcribe is fine and needs
+// no job queue.
 
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -15,8 +17,8 @@ export const dynamic = "force-dynamic";
 
 const SCRIPT_PATH = path.join(process.cwd(), "scripts", "transcript.py");
 
-// Generous: a long video with no captions is download + ffmpeg + a Whisper
-// upload that itself retries on 429. Anything past this is stuck, not slow.
+// Generous: every pull is download + ffmpeg + an AssemblyAI upload/submit/poll
+// cycle that itself retries on 429s. Anything past this is stuck, not slow.
 const TIMEOUT_MS = 5 * 60_000;
 
 function pythonBin(): string {
@@ -28,7 +30,13 @@ function pythonBin(): string {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-type ScriptResult = { transcript?: string; error?: string; source?: string };
+type TranscriptSegment = { time: string; speaker?: string; text: string };
+type ScriptResult = {
+  transcript?: string;
+  segments?: TranscriptSegment[];
+  error?: string;
+  source?: string;
+};
 
 function runScript(url: string): Promise<ScriptResult> {
   return new Promise((resolve) => {
@@ -123,5 +131,9 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json({ transcript: result.transcript, source: result.source });
+  return NextResponse.json({
+    transcript: result.transcript,
+    segments: result.segments ?? [],
+    source: result.source,
+  });
 }

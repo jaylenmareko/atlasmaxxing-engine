@@ -18,10 +18,10 @@ services:
     healthCheckPath: /healthz
 
     envVars:
-      # Whisper fallback, used whenever a video has no captions — which is
-      # essentially always for Instagram and TikTok. Swap the key name to
-      # OPENAI_API_KEY if you'd rather use OpenAI.
-      - key: GROQ_API_KEY
+      # AssemblyAI fallback (with speaker diarization), used whenever a video
+      # has no captions — which is essentially always for Instagram and
+      # TikTok.
+      - key: ASSEMBLYAI_API_KEY
         sync: false
       # Site-wide shared login. If these two are unset the site is PUBLIC —
       # the gate is skipped so local dev doesn't prompt, which means omitting

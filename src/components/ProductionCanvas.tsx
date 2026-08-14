@@ -84,8 +84,9 @@ function animationPromptFor(row: RowData) {
 // There used to be a "Prompt 1" chip here too, holding placeholder text that
 // described pulling a transcript out of the source video. That job is now
 // real and automatic: the source card takes a pasted URL and calls
-// /api/transcript (yt-dlp captions, Whisper fallback), writing the result
-// straight into the Transcript box. A prompt chip describing the work is
+// /api/transcript (yt-dlp audio -> AssemblyAI, with speaker diarization),
+// writing the result straight into the Transcript box. A prompt chip
+// describing the work is
 // redundant once the work actually happens, so the chip and its
 // scriptPromptFor() placeholder are gone.
 //
@@ -97,6 +98,16 @@ function animationPromptFor(row: RowData) {
 function newScriptPromptFor(project: ProjectData) {
   return `Using the same character, tone, and recreation format as "${project.title}", write the next script in the series — same structure, a different angle or example than what's already been covered.`;
 }
+
+// One timestamped line of a transcript, as returned by /api/transcript's
+// `segments` field. Kept separate from the flat `transcript` string (which
+// still drives promptValues.transcript / the free-text editor) so the
+// popup below can render real per-line timestamps instead of one blob.
+// `speaker` is only present when the source diarized — the AssemblyAI
+// fallback path labels each turn "Speaker A"/"Speaker B"/etc; captions (no
+// diarization info at all) omit it, and the popup below just skips the label
+// for those rows rather than showing a fake/blank one.
+type TranscriptSegment = { time: string; speaker?: string; text: string };
 
 // "source" is no longer a lightbox kind — the source-video card handles its
 // own URL input / Go / Remove inline, so it never opens a lightbox at all.
@@ -242,6 +253,11 @@ export default function ProductionCanvas({ project }: { project: ProjectData }) 
   const [urlDraft, setUrlDraft] = useState("");
   const [transcriptStatus, setTranscriptStatus] = useState<"idle" | "loading" | "error">("idle");
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
+  // Segments from the most recent real pull — null until one succeeds (or
+  // after a hand-edit invalidates it, see saveModalPrompt), in which case the
+  // popup falls back to showing promptValues.transcript as one untimed block.
+  const [transcriptSegments, setTranscriptSegments] = useState<TranscriptSegment[] | null>(null);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(DEFAULT_SCALE);
@@ -448,12 +464,13 @@ export default function ProductionCanvas({ project }: { project: ProjectData }) 
         body: JSON.stringify({ url }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { transcript?: string; error?: string }
+        | { transcript?: string; segments?: TranscriptSegment[]; error?: string }
         | null;
       if (!res.ok || !data?.transcript) {
         throw new Error(data?.error || `Transcript pull failed (${res.status})`);
       }
       setPromptValues((prev) => ({ ...prev, transcript: data.transcript as string }));
+      setTranscriptSegments(data.segments && data.segments.length ? data.segments : null);
       setTranscriptStatus("idle");
     } catch (err) {
       // Keep sourceUrl set on failure — the card stays in its filled state so
@@ -480,6 +497,10 @@ export default function ProductionCanvas({ project }: { project: ProjectData }) 
   const saveModalPrompt = () => {
     if (!promptModal) return;
     setPromptValues((prev) => ({ ...prev, [promptModal.key]: promptModal.value }));
+    // A hand-edit can no longer be trusted to line up with the last real
+    // pull's per-line timestamps — fall back to showing the edited text as
+    // one untimed block rather than pairing stale times with new words.
+    if (promptModal.kind === "transcript") setTranscriptSegments(null);
     setPromptModal(null);
   };
 
@@ -721,6 +742,12 @@ export default function ProductionCanvas({ project }: { project: ProjectData }) 
   // value are the same source of truth (promptValues.transcript falling back
   // to the project's default), so an edit actually sticks visually.
   const transcriptText = promptValues.transcript ?? project.transcript;
+  // The popup always has SOMETHING to render as rows: real per-line
+  // timestamps from the last pull when they exist, or the flat text as one
+  // untimed block (the placeholder project.transcript, or a hand-edit that
+  // invalidated the last pull's segments — see saveModalPrompt).
+  const transcriptDisplaySegments: TranscriptSegment[] =
+    transcriptSegments ?? (transcriptText ? [{ time: "", text: transcriptText }] : []);
 
   // Shared picker grid — reused both for the toggle-based Replace flow
   // (character/source/video) and the always-open picker an empty row slot
@@ -870,12 +897,17 @@ export default function ProductionCanvas({ project }: { project: ProjectData }) 
             <ArrowGap />
             <button
               type="button"
-              className="block w-full rounded-xl border bg-node text-left shadow transition-transform hover:scale-[1.01]"
+              className="flex w-full flex-col justify-center rounded-xl border bg-node text-left shadow transition-transform hover:scale-[1.01]"
               style={{ borderColor: "var(--node-line)", padding: 24, minHeight: SB_TRANSCRIPT_H, cursor: editMode ? "grab" : "pointer" }}
-              onClick={() => !editMode && openTranscript()}
+              onClick={() => !editMode && setTranscriptOpen(true)}
             >
-              <div className="cap mb-2" style={{ color: "var(--coral-deep)", fontSize: 20 }}>Transcript</div>
-              <p className="leading-relaxed" style={{ color: "var(--muted)", fontSize: 18 }}>
+              <div className="mb-2 flex items-baseline justify-between">
+                <span className="cap" style={{ color: "var(--coral-deep)", fontSize: 20 }}>Transcript</span>
+                <span className="font-mono text-[13px]" style={{ color: "var(--faint)" }}>
+                  {transcriptSegments ? `${transcriptSegments.length} lines` : "view"}
+                </span>
+              </div>
+              <p className="line-clamp-2 leading-relaxed" style={{ color: "var(--muted)", fontSize: 18 }}>
                 {transcriptText}
               </p>
             </button>
@@ -1135,6 +1167,47 @@ export default function ProductionCanvas({ project }: { project: ProjectData }) 
                   {replaceOpen && pickerGrid}
                 </>
               )}
+            </div>
+          </div>
+        </Overlay>
+      )}
+
+      {/* ---- transcript popup ---- */}
+      {transcriptOpen && (
+        <Overlay onClose={() => setTranscriptOpen(false)}>
+          <div className="flex w-full max-w-lg flex-col gap-3 rounded-2xl p-5 shadow-2xl" style={{ background: "var(--node)" }}>
+            <div className="cap" style={{ color: "var(--coral-deep)" }}>Transcript</div>
+            <div className="flex max-h-[55vh] flex-col gap-3 overflow-y-auto pr-1">
+              {transcriptDisplaySegments.map((seg, i) => (
+                <div key={i} className="flex gap-3">
+                  {seg.time && (
+                    <span className="w-10 shrink-0 pt-[1px] text-right font-mono text-[12px]" style={{ color: "var(--faint)" }}>
+                      {seg.time}
+                    </span>
+                  )}
+                  <div className="min-w-0">
+                    {seg.speaker && (
+                      <div className="mb-0.5 text-[11px] font-bold uppercase tracking-wide" style={{ color: "var(--blue)" }}>
+                        {seg.speaker}
+                      </div>
+                    )}
+                    <p className="leading-relaxed" style={{ color: "var(--ink)", fontSize: 14 }}>{seg.text}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center justify-between border-t pt-3" style={{ borderColor: "var(--node-line)" }}>
+              <button
+                type="button"
+                onClick={() => { setTranscriptOpen(false); openTranscript(); }}
+                className="text-[12px] font-semibold"
+                style={{ color: "var(--blue)" }}
+              >
+                Edit as text
+              </button>
+              <button type="button" onClick={() => setTranscriptOpen(false)} className="rounded-lg border px-3 py-2 text-[12px] font-semibold" style={{ borderColor: "var(--node-line)" }}>
+                Close
+              </button>
             </div>
           </div>
         </Overlay>
@@ -1475,7 +1548,7 @@ function PromptChip({ left, top, width = PROMPT_W, height = PROMPT_H, tone, onCl
 // Replaced a mock "pick from your uploaded videos" picker. Two states, one
 // box: empty (URL input + Go) and filled (the link + Remove/Go). Go is
 // persistent in the filled state on purpose — a pull can fail on a private
-// video or a Whisper hiccup, and re-running it is the obvious recovery.
+// video or an AssemblyAI hiccup, and re-running it is the obvious recovery.
 //
 // Height is pinned by the caller to sbCardH rather than being content-driven,
 // so the fan-out wires that originate at this card's bottom edge stay where

@@ -3,14 +3,23 @@
 
 The /watch skill's watch.py chains download -> frames -> transcript; this is
 that chain with the frame-extraction half removed, since the canvas only wants
-words. Order of operations:
+words. Every pull: yt-dlp bestaudio -> ffmpeg -> AssemblyAI, with
+`speaker_labels: true`.
 
-    1. yt-dlp --skip-download  -> captions (fast, no media bytes, no API key)
-    2. if no captions: yt-dlp bestaudio -> ffmpeg -> Whisper (needs a key)
+There used to be a captions-first fast path (skip audio entirely when a video
+already had captions, no API key needed). Removed — captions never carry
+speaker info, and most YouTube videos have auto-captions, so that path always
+won and diarization never actually ran. See download.py's module docstring
+for the full reasoning. Every pull now costs an AssemblyAI call; there's no
+free/fast case anymore.
 
 Prints ONE json object on stdout, always:
-    {"transcript": "...", "source": "captions" | "whisper (groq)"}
+    {"transcript": "...", "segments": [{"time": "0:01", "speaker": "Speaker A", "text": "..."}], "source": "assemblyai"}
     {"error": "human-readable reason"}
+
+`transcript` is flat prose (what the editable promptValues.transcript box
+holds); `segments` is the same content broken into timestamped, speaker-
+labeled rows for the sidebar's popup.
 
 Every diagnostic goes to stderr so stdout stays machine-parseable — the Node
 route reads only the last stdout line, and yt-dlp/ffmpeg are chatty.
@@ -38,9 +47,9 @@ for _stream in (sys.stdout, sys.stderr):
     except AttributeError:
         pass
 
-from download import download_audio, fetch_subtitles, is_url  # noqa: E402
-from transcribe import format_plain, parse_vtt  # noqa: E402
-from whisper import load_api_key, transcribe_video  # noqa: E402
+from assemblyai import load_api_key, transcribe_video  # noqa: E402
+from download import download_audio, is_url  # noqa: E402
+from transcribe import censor_segments, format_plain, to_display_segments  # noqa: E402
 
 
 def _emit(payload: dict) -> None:
@@ -51,35 +60,21 @@ def run(url: str, work: Path) -> dict:
     if not is_url(url):
         return {"error": "That doesn't look like a video URL — paste a full https:// link."}
 
-    # --- pass 1: captions (no media download, no API key) ---
-    print("[transcript] checking for captions…", file=sys.stderr)
-    subs = fetch_subtitles(url, work / "subs")
-    if subs.get("subtitle_path"):
-        try:
-            segments = parse_vtt(subs["subtitle_path"])
-            text = format_plain(segments)
-            if text:
-                print(f"[transcript] captions: {len(segments)} segments", file=sys.stderr)
-                return {"transcript": text, "source": "captions"}
-            print("[transcript] caption file was empty — falling back", file=sys.stderr)
-        except Exception as exc:
-            print(f"[transcript] caption parse failed: {exc} — falling back", file=sys.stderr)
-
-    # --- pass 2: whisper ---
-    backend, api_key = load_api_key()
-    if not backend or not api_key:
-        from whisper import NO_KEY_MESSAGE
+    api_key = load_api_key()
+    if not api_key:
+        from assemblyai import NO_KEY_MESSAGE
         return {"error": NO_KEY_MESSAGE}
 
-    print("[transcript] no captions — downloading audio for Whisper…", file=sys.stderr)
+    print("[transcript] downloading audio for AssemblyAI…", file=sys.stderr)
     dl = download_audio(url, work / "audio")
-    segments, used_backend = transcribe_video(
-        dl["media_path"], work / "audio.mp3", backend=backend, api_key=api_key
-    )
+    raw_segments, used_backend = transcribe_video(dl["media_path"], work / "audio.mp3", api_key=api_key)
+    # AssemblyAI's utterances are already correctly segmented per speaker
+    # turn — just profanity substitution needed, no dedupe/regroup.
+    segments = censor_segments(raw_segments)
     text = format_plain(segments)
     if not text:
         return {"error": "Transcription came back empty — the video may have no speech."}
-    return {"transcript": text, "source": f"whisper ({used_backend})"}
+    return {"transcript": text, "segments": to_display_segments(segments), "source": used_backend}
 
 
 def main() -> int:
@@ -95,8 +90,8 @@ def main() -> int:
     try:
         payload = run(args.url, work)
     except SystemExit as exc:
-        # download.py / whisper.py signal expected, explainable failures this
-        # way (missing binary, private video, no API key, ffmpeg blew up).
+        # download.py / assemblyai.py signal expected, explainable failures
+        # this way (missing binary, private video, no API key, ffmpeg blew up).
         # Turn them into a normal JSON error rather than a stack trace.
         payload = {"error": str(exc) or "Transcript pull failed"}
     except Exception as exc:  # genuinely unexpected — still don't crash the route

@@ -8,9 +8,9 @@
 FROM node:22-bookworm-slim
 
 # python3 + ffmpeg are RUNTIME deps of scripts/transcript.py, not build deps:
-# yt-dlp is a Python zipapp, and whisper.py shells out to ffmpeg to produce the
-# 16kHz mono mp3 it uploads. curl/ca-certificates fetch yt-dlp below and carry
-# the outbound TLS to the Whisper API.
+# yt-dlp is a Python zipapp, and assemblyai.py shells out to ffmpeg to produce
+# the 16kHz mono mp3 it uploads. curl/ca-certificates fetch yt-dlp below and
+# carry the outbound TLS to the AssemblyAI API.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
       ffmpeg \

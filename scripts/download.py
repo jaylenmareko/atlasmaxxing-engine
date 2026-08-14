@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """yt-dlp wrapper, trimmed for the transcript-only flow.
 
-Adapted from `.claude/skills/watch/scripts/download.py` at the repo root. Two
-differences from the original, both because this flow only ever needs words,
-never pixels:
+Adapted from `.claude/skills/watch/scripts/download.py` at the repo root.
+`download_audio()` grabs bestaudio rather than <=720p video — AssemblyAI only
+ever sees the audio track, so pulling the video stream would be wasted
+bandwidth.
 
-1. `fetch_subtitles()` uses `--skip-download`, so the captions path costs a
-   metadata call instead of a full video download. Most YouTube links resolve
-   entirely here.
-2. `download_audio()` grabs bestaudio rather than <=720p video — Whisper only
-   ever sees the audio track, so pulling the video stream would be wasted
-   bandwidth on the exact path that's already the slow one.
+There used to also be a `fetch_subtitles()` captions-first path (skip the
+audio download entirely when a video already has captions). Removed: it
+always won over the audio/AssemblyAI path whenever a video had ANY captions
+— which is most YouTube videos — so diarization (the whole point of the
+AssemblyAI fallback, see assemblyai.py) never actually ran for the common
+case. Captions were also often no more reliably punctuated than raw ASR
+output anyway (YouTube auto-captions on ordinary videos, not just the
+"-orig" variant). Every pull now goes through audio + AssemblyAI, always.
 
-The original's local-file branch (`resolve_local`) is gone: this is driven by
-an API route that only accepts URLs.
+The original's local-file branch (`resolve_local`) is gone too: this is
+driven by an API route that only accepts URLs.
 """
 from __future__ import annotations
 
@@ -37,14 +40,6 @@ def is_url(source: str) -> bool:
 def _require_yt_dlp() -> None:
     if shutil.which("yt-dlp") is None:
         raise SystemExit("yt-dlp is not installed on the server")
-
-
-def _pick_subtitle(out_dir: Path) -> Path | None:
-    candidates = sorted(out_dir.glob("video*.vtt"))
-    if not candidates:
-        return None
-    preferred = [c for c in candidates if ".en" in c.name]
-    return preferred[0] if preferred else candidates[0]
 
 
 def _pick_media(out_dir: Path) -> Path | None:
@@ -74,50 +69,11 @@ def _read_info(out_dir: Path, url: str) -> dict:
         return {"url": url}
 
 
-_SUB_ARGS = [
-    "--write-subs",
-    "--write-auto-subs",
-    "--sub-langs", "en,en-US,en-GB,en-orig",
-    "--sub-format", "vtt",
-    "--convert-subs", "vtt",
-]
-
-
-def fetch_subtitles(url: str, out_dir: Path) -> dict:
-    """Metadata + captions only — no media bytes.
-
-    Returns {"subtitle_path": str|None, "info": dict}. A missing subtitle is
-    the normal case for Instagram/TikTok, not an error.
-    """
-    _require_yt_dlp()
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        "yt-dlp",
-        "--skip-download",
-        "--write-info-json",
-        *_SUB_ARGS,
-        "--no-playlist",
-        "--ignore-errors",
-        "-o", str(out_dir / "video.%(ext)s"),
-        url,
-    ]
-    # stdout -> stderr so yt-dlp's progress chatter can never contaminate the
-    # JSON this pipeline prints on stdout.
-    subprocess.run(cmd, stdout=sys.stderr, stderr=sys.stderr)
-
-    subtitle = _pick_subtitle(out_dir)
-    return {
-        "subtitle_path": str(subtitle) if subtitle else None,
-        "info": _read_info(out_dir, url),
-    }
-
-
 def download_audio(url: str, out_dir: Path) -> dict:
-    """Audio-only download for the Whisper fallback.
+    """Audio-only download for the AssemblyAI fallback.
 
     `ba/b` = bestaudio, else best combined stream. ffmpeg re-encodes whatever
-    container comes back downstream in whisper.extract_audio, so the exact
+    container comes back downstream in assemblyai.extract_audio, so the exact
     format here doesn't matter.
     """
     _require_yt_dlp()
@@ -149,9 +105,6 @@ def download_audio(url: str, out_dir: Path) -> dict:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("usage: download.py <url> <out-dir> [--audio]", file=sys.stderr)
+        print("usage: download.py <url> <out-dir>", file=sys.stderr)
         raise SystemExit(2)
-    if "--audio" in sys.argv:
-        print(json.dumps(download_audio(sys.argv[1], Path(sys.argv[2])), indent=2))
-    else:
-        print(json.dumps(fetch_subtitles(sys.argv[1], Path(sys.argv[2])), indent=2))
+    print(json.dumps(download_audio(sys.argv[1], Path(sys.argv[2])), indent=2))
